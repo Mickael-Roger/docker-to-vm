@@ -1,0 +1,6 @@
+dockerfile
+keystoneauth1
+python-glanceclient
+python-novaclient
+python-neutronclient
+paramiko
