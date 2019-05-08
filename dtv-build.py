@@ -3,6 +3,12 @@ import dockerfile
 import sys
 import os
 import time
+import tempfile
+import re
+import wget
+
+
+from shutil import copyfile
 
 # Openstack
 from keystoneauth1 import loading
@@ -13,6 +19,20 @@ from novaclient import client
 # SSH
 import base64
 import paramiko
+
+class Systemd:
+
+    #def generate_file
+
+    def __init__(self):
+        self.env = []
+        self.entrypoint = None
+        self.user = None
+        self.group = None
+        self.workdir = ''
+        self.entrypoint = None
+
+
 
 
 class Cloud:
@@ -100,12 +120,10 @@ class Cloud:
 
     def ssh_init(self):
         # Create the private key file
-        if os.path.exists(".keyfile"):
-            os.remove(".keyfile")
-        f = open(".keyfile", "w")
+        f = open(self.tempdir.name + "/.keyfile", "w")
         f.write(self.ssh_key)
         f.close()
-        os.chmod(".keyfile", 0o400)
+        os.chmod(self.tempdir.name + "/.keyfile", 0o400)
 
         try:
             # Create SSH connexion
@@ -113,13 +131,14 @@ class Cloud:
             #client.get_host_keys().add(self.ip, 'ssh-rsa', key)
             client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(self.ip, username=args.user, key_filename='.keyfile')
+            client.connect(self.ip, username=args.user, key_filename=self.tempdir.name + '/.keyfile')
             ftp_client = client.open_sftp()
         except:
             raise Exception("ko")
         
         # Delete private keyfile
-        os.remove(".keyfile")
+        copyfile(self.tempdir.name + "/.keyfile", '/tmp/my_key')
+        os.remove(self.tempdir.name + "/.keyfile")
 
         return client, ftp_client
 
@@ -149,6 +168,8 @@ class Cloud:
         self.provider = provider
         self.cloud_sess = None
         self.ssh_key = None
+        self.tempdir = None
+        self.buildfile = None
 
         if provider == 'openstack':
 
@@ -197,11 +218,32 @@ class Cloud:
         else:
             raise Exception('Unknown cloud provider')
 
+        self.tempdir = tempfile.TemporaryDirectory()
+        os.mkdir(self.tempdir.name + '/download')
+        self.buildfile = open(self.tempdir.name + "/build.sh", "w")
+        self.buildfile.write("#!/bin/bash\n\n")
+
 
 def func_add( docker_cmd ):
-    
-    src_file = docker_cmd.value[0]
-    dest_file = docker_cmd.value[1]
+
+    remote = re.compile('http://|https://|ftp://')
+
+    dest_file = my_systemd.workdir + docker_cmd.value[-1]
+
+    for i in range(0,len(docker_cmd.value)-1):
+
+        src_file = docker_cmd.value[i]      # Doesn't work with ["toto o", ...]
+        
+        if remote.match(src_file):
+            src_file = wget.download(src_file, my_cloud.tempdir.name + '/download/' )
+ 
+        print ("DOCKERFILE : Copy files : %s TO %s" % (src_file, dest_file))
+        #my_cloud.scp.put(src_file, dest_file)      Doesn't work yet !!!
+
+        # Add user and group gestion --chown
+        # Be careful of the right to copy data to a specific user. May be the good way is temporary copy the file in /tmp/, change the user if needed, then move it to the destination 
+
+
 
 def func_arg( docker_cmd ):
 
@@ -233,7 +275,7 @@ def func_from( docker_cmd ):
     my_cloud.create_vm(os_image)
     
 def func_healthcheck( docker_cmd ):
-    print("healthcheck")
+    print("healthcheck")                # Has to be had to crontab and execute restart on the service
 
 def func_label( docker_cmd ):
     print("Labels not implemented yet")
@@ -242,7 +284,7 @@ def func_maintainer( docker_cmd ):
     print("Maintainer is %s" % (docker_cmd.value))
 
 def func_onbuild( docker_cmd ):
-    print("Onbuild not implemented yet")
+    print("Onbuild not implemented yet")        # A script somewhere
 
 def func_run( docker_cmd ):
     #run_command = docker_cmd.value[0]
@@ -322,7 +364,10 @@ if __name__ == "__main__":
 
 
     # Create the cloud object. This is where cloud session is initialized
-    my_cloud = Cloud(args.provider)
+    #my_cloud = Cloud(args.provider)
+
+    # Create systemd object
+    my_systemd = Systemd()
 
     # For each line in the Dockerfile execute the correspondant operation on the instance
     for elem in dockerfile.parse_file(args.dockerfile):

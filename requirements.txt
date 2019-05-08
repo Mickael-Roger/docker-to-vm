@@ -4,3 +4,4 @@ python-glanceclient
 python-novaclient
 python-neutronclient
 paramiko
+wget
