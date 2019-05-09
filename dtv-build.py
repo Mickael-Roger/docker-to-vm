@@ -262,8 +262,14 @@ def func_add( docker_cmd ):
         for src_file in src_files:
             file_name = os.path.basename(src_file)
             dest_file = dest_dir + file_name
-            print ("DOCKERFILE : Copy files : %s TO %s" % (src_file, dest_file))
-            send_file(src_file, dest_file, my_systemd.user, my_systemd.group)
+        
+                if docker_cmd.flags:
+                    splitted_flags = re.split(r'\W+', docker_cmd.flags[0])
+                    file_user = splitted_flags[2]
+                    file_group = splitted_flags[3]
+                    send_file(src_file, dest_file, file_user, file_group)
+                else:
+                    send_file(src_file, dest_file, my_systemd.user, my_systemd.group)
 
         # Clean download directory
         files = glob.glob(my_cloud.tempdir.name + '/download/*')
