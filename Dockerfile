@@ -1,12 +1,8 @@
 FROM bastion
 
-ADD toto /tmp/
-ADD tt* /tmp/
-ADD dd ff /tmp/
-ADD --chown=user:grp toto /tmp/
-ADD --chown=user:grp toto* /tmp/
-ADD ["toto", "/tmp"/]
-ADD ["tot o", "/tmp"/]
-ADD --chown=user:grp ["tot o", "/tmp"/]
-ADD https://www.free.fr/index.html fff 
+ADD toto /root/
+ADD tt* /root/
+ADD dd ff /usr/
+ADD --chown=centos:centos toto /var/
+ADD https://www.free.fr/index.html /home/centos/ 
 

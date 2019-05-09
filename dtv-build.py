@@ -6,6 +6,7 @@ import time
 import tempfile
 import re
 import wget
+import glob
 
 
 from shutil import copyfile
@@ -27,8 +28,8 @@ class Systemd:
     def __init__(self):
         self.env = []
         self.entrypoint = None
-        self.user = None
-        self.group = None
+        self.user = 'root'
+        self.group = 'root'
         self.workdir = ''
         self.entrypoint = None
 
@@ -137,7 +138,7 @@ class Cloud:
             raise Exception("ko")
         
         # Delete private keyfile
-        copyfile(self.tempdir.name + "/.keyfile", '/tmp/my_key')
+        copyfile(self.tempdir.name + "/.keyfile", '/tmp/my_key')            # For debug only
         os.remove(self.tempdir.name + "/.keyfile")
 
         return client, ftp_client
@@ -224,25 +225,50 @@ class Cloud:
         self.buildfile.write("#!/bin/bash\n\n")
 
 
+def send_file(src, dest, user, grp):
+    file_name = os.path.basename(src)
+    my_cloud.scp.put(src, '/tmp/' + file_name)
+    send_cmd("sudo -u " + user + " mv /tmp/" + file_name + " " + dest)
+    send_cmd("chown " + user + ":" + grp + " " + dest)
+
+def send_cmd(cmd):
+    try:
+        my_cloud.ssh.exec_command(cmd)
+    except:
+        raise Exception("ko : Could not execute %s" % (cmd))
+
+
 def func_add( docker_cmd ):
+
 
     remote = re.compile('http://|https://|ftp://')
 
-    dest_file = my_systemd.workdir + docker_cmd.value[-1]
+    dest_dir = my_systemd.workdir + docker_cmd.value[-1]
 
-    for i in range(0,len(docker_cmd.value)-1):
+    if not dest_dir.endswith("/"):
+        dest_dir = dest_dir + '/'
 
-        src_file = docker_cmd.value[i]      # Doesn't work with ["toto o", ...]
-        
-        if remote.match(src_file):
-            src_file = wget.download(src_file, my_cloud.tempdir.name + '/download/' )
- 
-        print ("DOCKERFILE : Copy files : %s TO %s" % (src_file, dest_file))
-        #my_cloud.scp.put(src_file, dest_file)      Doesn't work yet !!!
+    for i in range(0,len(docker_cmd.value)-1):  # Doesn't work with ["file1", ...]
+   
+        ref_src = docker_cmd.value[i]
 
-        # Add user and group gestion --chown
-        # Be careful of the right to copy data to a specific user. May be the good way is temporary copy the file in /tmp/, change the user if needed, then move it to the destination 
+        if remote.match(ref_src):
+            ref_src = wget.download(ref_src, my_cloud.tempdir.name + '/download/' )
 
+        src_files = glob.glob(ref_src)
+
+        print(src_files)
+
+        for src_file in src_files:
+            file_name = os.path.basename(src_file)
+            dest_file = dest_dir + file_name
+            print ("DOCKERFILE : Copy files : %s TO %s" % (src_file, dest_file))
+            send_file(src_file, dest_file, my_systemd.user, my_systemd.group)
+
+        # Clean download directory
+        files = glob.glob(my_cloud.tempdir.name + '/download/*')
+        for f in files:
+            os.remove(f)
 
 
 def func_arg( docker_cmd ):
@@ -364,7 +390,7 @@ if __name__ == "__main__":
 
 
     # Create the cloud object. This is where cloud session is initialized
-    #my_cloud = Cloud(args.provider)
+    my_cloud = Cloud(args.provider)
 
     # Create systemd object
     my_systemd = Systemd()
