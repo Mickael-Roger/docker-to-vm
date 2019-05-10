@@ -8,7 +8,7 @@ import re
 import wget
 import glob
 
-
+from pprint import pprint
 from shutil import copyfile
 
 # Openstack
@@ -23,7 +23,7 @@ import paramiko
 
 class Systemd:
 
-    #def generate_file
+    #def generate_file : ! Generate and env at the beginning and at the end et get the difference + Get de CWD at the end of the script (Use a var DTV_CWD)
 
     def __init__(self):
         self.env = []
@@ -31,7 +31,8 @@ class Systemd:
         self.user = 'root'
         self.group = 'root'
         self.workdir = ''
-        self.entrypoint = None
+        self.entrypoint = ""
+        self.cmd = ""
 
 
 
@@ -76,7 +77,7 @@ class Cloud:
         sys.stdout.flush()
 
             # Get image ID
-        image = nova.glance.find_image(os_image)
+        image = nova.glance.find_image('in:"' + os_image + '"')
         os_image_id = image.id
 
             # Get flavor-id
@@ -154,10 +155,6 @@ class Cloud:
         self.ssh, self.scp = self.ssh_init()
         print("ok")
 
-        # TO Remove
-        stdin, stdout, stderr = self.ssh.exec_command('pwd')
-        for line in stdout:
-                print(line.strip('\n'))
 
 
     def __init__(self, provider):
@@ -223,13 +220,21 @@ class Cloud:
         os.mkdir(self.tempdir.name + '/download')
         self.buildfile = open(self.tempdir.name + "/build.sh", "w")
         self.buildfile.write("#!/bin/bash\n\n")
+        self.buildfile.write("cd\n\n")
+        self.buildfile.write("set > /tmp/dtv-init.start\n\n")
 
 
 def send_file(src, dest, user, grp):
     file_name = os.path.basename(src)
-    my_cloud.scp.put(src, '/tmp/' + file_name)
-    send_cmd("sudo -u " + user + " mv /tmp/" + file_name + " " + dest)
-    send_cmd("chown " + user + ":" + grp + " " + dest)
+    dir_name = os.path.dirname(src)
+    send_cmd("sudo mkdir -p /tmp/dtv-file/" + dir_name)
+    send_cmd("sudo chmod -R ugo+rwX /tmp/dtv-file")
+    my_cloud.scp.put(src, '/tmp/dtv-file/' + src)
+
+    my_cloud.buildfile.write("cp -rf /tmp/dtv-file/" + src + " " + dest)
+
+    if user is not None:
+        send_cmd("sudo chown " + user + ":" + grp + " " + dest)
 
 def send_cmd(cmd):
     try:
@@ -238,6 +243,8 @@ def send_cmd(cmd):
         raise Exception("ko : Could not execute %s" % (cmd))
 
 
+
+# Done  !!! First copy in a temporary directory in the server, then add a copy command to the build.sh
 def func_add( docker_cmd ):
 
 
@@ -257,46 +264,71 @@ def func_add( docker_cmd ):
 
         src_files = glob.glob(ref_src)
 
-        print(src_files)
-
         for src_file in src_files:
             file_name = os.path.basename(src_file)
             dest_file = dest_dir + file_name
         
-                if docker_cmd.flags:
+            if docker_cmd.flags:
                     splitted_flags = re.split(r'\W+', docker_cmd.flags[0])
                     file_user = splitted_flags[2]
                     file_group = splitted_flags[3]
                     send_file(src_file, dest_file, file_user, file_group)
-                else:
-                    send_file(src_file, dest_file, my_systemd.user, my_systemd.group)
+            else:
+                    send_file(src_file, dest_file, None, None)
 
         # Clean download directory
         files = glob.glob(my_cloud.tempdir.name + '/download/*')
         for f in files:
             os.remove(f)
 
-
+# Done
 def func_arg( docker_cmd ):
 
-    if args.arguments is not None:
-        searched_value = re.compile(docker_cmd.value[0] + '=')
+    my_val = []
 
-        for argument in args.arguments:
-            if searched_value.match(argument):
-                val_start = searched_value.match(argument).end()
-                cmd_to_send = 'export ' + docker_cmd.value[0] + '=' + argument[val_start:]
-                #my_cloud.ssh_exec(cmd_to_send)
+    # Set default value "" if not set or the value itself
+    for value in docker_cmd.value:
+        if re.search("=", value):
+            my_val = re.split("=", value)
+        else:
+            my_val.append(value)
+            my_val.append("")
 
+        # If it is in the args then change the value
+        if args.arguments is not None:
+            searched_value = re.compile(my_val[0] + '=')
+            for argument in args.arguments:
+                if searched_value.match(argument):
+                    val_start = searched_value.match(argument).end()
+                    my_val[1] = argument[val_start:]
+
+    # Set env vars in docker_run.sh
+    my_cloud.buildfile.write("export " + my_val[0] + '=' + my_val[1] + "\n\n")
+
+    # Append env to my_systemd.env
+    my_systemd.env.append((my_val[0],my_val[1]))
+
+                
+
+# Done
 def func_copy( docker_cmd ):
     func_add( docker_cmd )
 
+# TODO
 def func_entrypoint( docker_cmd ):
     print("entrypoint")
 
+# Done
 def func_env( docker_cmd ):
-    cmd_to_send = 'export ' + docker_cmd.value[0] + '=' + docker_cmd.value[1]
 
+    # Set env vars in docker_run.sh
+    my_cloud.buildfile.write("export " + docker_cmd.value[0] + '=' + docker_cmd.value[1] + "\n\n")
+
+    # Append env to my_systemd.env
+    my_systemd.env.append((docker_cmd.value[0],docker_cmd.value[1]))
+
+
+# Done
 def func_from( docker_cmd ):
     
     os_image = docker_cmd.value[0]
@@ -305,47 +337,60 @@ def func_from( docker_cmd ):
         raise Exception("Base image %s not found" % (os_image))
 
     my_cloud.create_vm(os_image)
-    
+
+# TODO
 def func_healthcheck( docker_cmd ):
     print("healthcheck")                # Has to be had to crontab and execute restart on the service
 
+# Done
 def func_label( docker_cmd ):
     print("Labels not implemented yet")
 
+# Done
 def func_maintainer( docker_cmd ):
     print("Maintainer is %s" % (docker_cmd.value))
 
+# TODO
 def func_onbuild( docker_cmd ):
     print("Onbuild not implemented yet")        # A script somewhere
 
+# Done TO TEST
 def func_run( docker_cmd ):
-    #run_command = docker_cmd.value[0]
+    my_cloud.buildfile.write(docker_cmd.value[0] + "\n\n")
     return
 
+# Done
 def func_shell( docker_cmd ):
     func_run( docker_cmd )                          # Sorry Windows !!!
 
+# Done
 def func_stopsignal( docker_cmd ):
     print("Do you really need to specify a specific signal when you use systemd ?")
 
+# Done TO TEST
 def func_user( docker_cmd ):
-    #run_command = 'sudo ' + docker_cmd.value    # TODO : Add to the entrypoint (so do the systemd)
+    my_cloud.buildfile.write("sudo su " + docker_cmd.value[0] + "\n\n")
     return
 
+# Done
 def func_cmd( docker_cmd ):
+    my_systemd.cmd = docker_cmd.value[0]
     return
 
+# Done
 def func_expose( docker_cmd ):
     print("No needed while firewalld is not implemented in the source os image. Please use security group instead")
 
+# Done
 def func_volume( docker_cmd ):
     return
 
+# Done TO TEST
 def func_workdir( docker_cmd ):
-    #cmd_to_send = 'cd ' + docker_cmd.value[0]
+    my_cloud.buildfile.write("cd " + docker_cmd.value[0] + "\n\n")
     return
 
-
+# Done
 def execute_dockercmd( dockercmd ):
     "For each Dockerfile command, execute/generate the equivalent in an VM"
 
@@ -404,3 +449,32 @@ if __name__ == "__main__":
     # For each line in the Dockerfile execute the correspondant operation on the instance
     for elem in dockerfile.parse_file(args.dockerfile):
         execute_dockercmd(elem)
+
+
+    my_cloud.buildfile.write("pwd > /tmp/dtv-cwd\n\n")
+    my_cloud.buildfile.write("set > /tmp/dtv-init.end\n\n")
+
+    my_cloud.buildfile.close()
+
+    send_cmd("chmod +x /root/build.sh")
+
+    my_cloud.scp.put(my_cloud.tempdir.name + "/build.sh", "/tmp/build.sh")
+    send_cmd("sudo mv /tmp/build.sh /root/build.sh")
+    send_cmd("sudo chmod +x /root/build.sh")
+    send_cmd("sudo /root/build.sh")
+
+    send_cmd("sudo sdiff /tmp/dtv-init.start /tmp/dtv-init.end | grep '  >' | awk {' print $2 '} > /tmp/new_env")
+    send_cmd("sudo chmod 666 /tmp/new_env /tmp/dtv-cwd")
+
+    my_cloud.scp.get('/tmp/new_env','./new_env')
+    my_cloud.scp.get('/tmp/dtv-cwd','./dtv-cwd')
+
+    print("Next is coming ...")
+
+
+    # Generate the systemd file
+    # Install and enable systemd
+
+    # Make a glance image
+
+    # TODO later : Generate the onbuild file + Generate the script file used when this image is used as FROM
