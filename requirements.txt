@@ -6,3 +6,4 @@ python-neutronclient
 paramiko
 wget
 glob
+jinja2

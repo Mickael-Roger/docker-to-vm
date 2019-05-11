@@ -7,8 +7,8 @@ import tempfile
 import re
 import wget
 import glob
+from jinja2 import Template
 
-from pprint import pprint
 from shutil import copyfile
 
 # Openstack
@@ -27,12 +27,12 @@ class Systemd:
 
     def __init__(self):
         self.env = []
-        self.entrypoint = None
         self.user = 'root'
         self.group = 'root'
         self.workdir = ''
         self.entrypoint = ""
         self.cmd = ""
+        self.description = ""
 
 
 
@@ -137,7 +137,7 @@ class Cloud:
             ftp_client = client.open_sftp()
         except:
             raise Exception("ko")
-        
+
         # Delete private keyfile
         copyfile(self.tempdir.name + "/.keyfile", '/tmp/my_key')            # For debug only
         os.remove(self.tempdir.name + "/.keyfile")
@@ -154,6 +154,11 @@ class Cloud:
         print("Create ssh and scp connection to instance ... ", end=" ")
         self.ssh, self.scp = self.ssh_init()
         print("ok")
+
+        # Used in case of reusing this image as a FROM image in another Docker file
+        send_cmd("if `sudo systemctl is-enabled dtv`; then sudo systemctl stop dtv; fi")
+
+        # GET all env, users, ... to put that in the beginning of build file TODO
 
 
 
@@ -238,13 +243,16 @@ def send_file(src, dest, user, grp):
 
 def send_cmd(cmd):
     try:
-        my_cloud.ssh.exec_command(cmd)
+        stdin,stdout,stderr = my_cloud.ssh.exec_command(cmd)
     except:
         raise Exception("ko : Could not execute %s" % (cmd))
 
+    print("   Executing : %s" % (cmd))
+    for line in stdout:
+        print('   ... ' + line.strip('\n'))
 
 
-# Done  !!! First copy in a temporary directory in the server, then add a copy command to the build.sh
+# Done
 def func_add( docker_cmd ):
 
 
@@ -316,7 +324,8 @@ def func_copy( docker_cmd ):
 
 # TODO
 def func_entrypoint( docker_cmd ):
-    print("entrypoint")
+    entrypoint = ' '.join(docker_cmd.value)
+    my_systemd.entrypoint = entrypoint
 
 # Done
 def func_env( docker_cmd ):
@@ -344,11 +353,11 @@ def func_healthcheck( docker_cmd ):
 
 # Done
 def func_label( docker_cmd ):
-    print("Labels not implemented yet")
+    my_systemd.description = docker_cmd.value[0]
 
 # Done
 def func_maintainer( docker_cmd ):
-    print("Maintainer is %s" % (docker_cmd.value))
+    print("Maintainer is %s" % (docker_cmd.value[0]))
 
 # TODO
 def func_onbuild( docker_cmd ):
@@ -374,7 +383,8 @@ def func_user( docker_cmd ):
 
 # Done
 def func_cmd( docker_cmd ):
-    my_systemd.cmd = docker_cmd.value[0]
+    cmd = ' '.join(docker_cmd.value)
+    my_systemd.cmd = cmd
     return
 
 # Done
@@ -456,6 +466,8 @@ if __name__ == "__main__":
 
     my_cloud.buildfile.close()
 
+    print("Building the service ... ")
+
     send_cmd("chmod +x /root/build.sh")
 
     my_cloud.scp.put(my_cloud.tempdir.name + "/build.sh", "/tmp/build.sh")
@@ -464,17 +476,54 @@ if __name__ == "__main__":
     send_cmd("sudo /root/build.sh")
 
     send_cmd("sudo sdiff /tmp/dtv-init.start /tmp/dtv-init.end | grep '  >' | awk {' print $2 '} > /tmp/new_env")
-    send_cmd("sudo chmod 666 /tmp/new_env /tmp/dtv-cwd")
-
+    send_cmd("sudo chmod 666 /tmp/dtv-cwd /tmp/new_env")
+    
     my_cloud.scp.get('/tmp/new_env','./new_env')
     my_cloud.scp.get('/tmp/dtv-cwd','./dtv-cwd')
+    
 
-    print("Next is coming ...")
+    # Add new env vars to my_systemd.env
+    with open('./new_env') as envfile:
+        my_systemd.env.append(envfile.readline())
 
+    # Get the current working directory
+    with open('./dtv-cwd') as cwdfile:
+        my_systemd.workdir = cwdfile.readline()
 
     # Generate the systemd file
+    with open('dtv.service.j2') as j2file:
+        template = Template(j2file.read())
+
+    
+    my_cmd_tmp = my_systemd.entrypoint + " " + my_systemd.cmd
+    if my_cmd_tmp.startswith('./'):
+        my_cmd = my_systemd.workdir + "/" + my_cmd_tmp
+    elif not my_cmd_tmp.startswith('/'):
+        stdin,stdout,stderr = my_cloud.ssh.exec_command("whereis " + my_cmd_tmp.partition(' ')[0] + " | awk {' print $2 '}")
+        for line in stdout:
+            cmd_path = line.strip('\n')
+        dir_name = os.path.dirname(cmd_path)
+        my_cmd = dir_name + "/" + my_cmd_tmp
+    else:
+        my_cmd = my_cmd_tmp
+
+
+    output_systemd = template.render(description=my_systemd.description, vars=my_systemd.env, user=my_systemd.user, workdir=my_systemd.workdir, entrypoint_cmd=my_cmd)
+
+    systemd_file = open(my_cloud.tempdir.name + "/dtv.service", "w")
+    systemd_file.write(output_systemd)
+    systemd_file.close()
+
+    # Upload systemd service file
+    my_cloud.scp.put(my_cloud.tempdir.name + "/dtv.service", "/tmp/dtv.service")
+    send_cmd("sudo cp -rf /tmp/dtv.service /usr/lib/systemd/system/")
+    send_cmd("sudo chown root:root /usr/lib/systemd/system/dtv.service")
+
     # Install and enable systemd
+    send_cmd("sudo systemctl --system daemon-reload")
+    send_cmd("sudo systemctl enable dtv")
 
     # Make a glance image
 
     # TODO later : Generate the onbuild file + Generate the script file used when this image is used as FROM
+    # TODO : Put dtc-cwd and new_env in the temporary directory

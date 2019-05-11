@@ -1,0 +1,21 @@
+[Unit]
+Description="{{ description }}"
+After=multi-user.target
+
+
+[Service]
+# Client Env Vars
+{% for var in vars %}
+{% if var[0] |length %}
+Environment={{ var[0] }}={{ var[1] }}
+{% endif %}
+{% endfor %}
+# Extra Env Vars
+{% for extra_var in extra_vars %}
+Environment={{ extra_var }}
+{% endfor %}
+User={{ user }}
+WorkingDirectory={{ workdir }}
+ExecStart={{ entrypoint_cmd }}
+ExecStop=/bin/kill -9 ${MAINPID}
+
